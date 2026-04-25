@@ -1,5 +1,6 @@
 package in.utilhub.querylab.report;
 
+import in.utilhub.querylab.baseline.BaselineDiff;
 import in.utilhub.querylab.model.Fingerprint;
 import in.utilhub.querylab.model.Flag;
 import in.utilhub.querylab.model.RunReport;
@@ -23,6 +24,10 @@ import java.util.Map;
 public final class HtmlReportWriter {
 
     public void write(RunReport report, Path target) throws IOException {
+        write(report, target, null);
+    }
+
+    public void write(RunReport report, Path target, BaselineDiff diff) throws IOException {
         try (Writer w = Files.newBufferedWriter(target, StandardCharsets.UTF_8)) {
             w.append("<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">");
             w.append("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">");
@@ -36,6 +41,9 @@ public final class HtmlReportWriter {
             w.append("<span class=\"name\">querylab<span class=\"host\"> · run report</span></span>");
             w.append("<span class=\"meta\">").append(esc(report.capturedAt().toString())).append("</span>");
             w.append("</header>");
+
+            // Baseline diff banner (if a baseline is available)
+            renderBaselineDiff(w, diff);
 
             // Stats row
             w.append("<section class=\"stats\">");
@@ -114,6 +122,30 @@ public final class HtmlReportWriter {
         if (tone != null) { w.append(' '); w.append(tone); }
         w.append("\"><div class=\"k\">").append(esc(label)).append("</div>");
         w.append("<div class=\"v\">").append(esc(value)).append("</div></div>");
+    }
+
+    private void renderBaselineDiff(Writer w, BaselineDiff diff) throws IOException {
+        if (diff == null) return;
+        w.append("<section class=\"diff\">");
+        w.append("<div class=\"diff-h\">// since baseline</div>");
+        if (diff.isClean()) {
+            w.append("<div class=\"diff-clean\">✓ no new flags vs. .querylab/baseline.json — branch matches the approved state.</div>");
+        } else {
+            w.append("<div class=\"diff-summary\">");
+            w.append("<span class=\"diff-pill bad\">+").append(Integer.toString(diff.newFlags().size())).append(" new flags</span>");
+            w.append("<span class=\"diff-pill\">+").append(Integer.toString(diff.newFingerprints().size())).append(" new fingerprints</span>");
+            w.append("<span class=\"diff-pill mute\">").append(Integer.toString(diff.approvedFingerprintsHidden())).append(" approved (hidden)</span>");
+            w.append("</div>");
+            for (Flag fl : diff.newFlags()) {
+                w.append("<div class=\"diff-flag ").append(severityClass(fl.severity())).append("\">");
+                w.append("<span class=\"chip\">").append(esc(fl.ruleId())).append("</span>");
+                w.append("<span class=\"sev\">").append(esc(fl.severity().name())).append("</span>");
+                w.append("<span class=\"diff-msg\">").append(esc(fl.message())).append("</span>");
+                w.append("<span class=\"test\">").append(esc(fl.testMethod())).append("</span>");
+                w.append("</div>");
+            }
+        }
+        w.append("</section>");
     }
 
     private static Map<String, String> sqlByHash(List<Fingerprint> fps) {
@@ -202,5 +234,17 @@ public final class HtmlReportWriter {
         ".test-name{color:var(--fg)}.test-head .meta{margin-left:auto;color:var(--faint);font-size:11px}" +
         ".test-fp{display:grid;grid-template-columns:140px 80px 1fr;gap:12px;padding:5px 8px;font-size:12.5px;color:var(--dim)}" +
         ".test-fp.warn .num.strong{color:var(--red)}" +
-        ".foot{padding:24px 28px;color:var(--faint);font-size:11px;border-top:1px solid var(--soft);text-align:center;margin-top:24px}";
+        ".foot{padding:24px 28px;color:var(--faint);font-size:11px;border-top:1px solid var(--soft);text-align:center;margin-top:24px}" +
+        ".diff{padding:18px 28px;max-width:1200px;margin:18px auto 0;width:100%;border:1px solid var(--soft);border-left:3px solid var(--amber);border-radius:8px;background:var(--bg1)}" +
+        ".diff-h{color:var(--amber);font-size:12px;letter-spacing:.1em;margin-bottom:10px}" +
+        ".diff-clean{color:var(--grn);font-size:13px}" +
+        ".diff-summary{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}" +
+        ".diff-pill{padding:3px 10px;border:1px solid var(--soft);border-radius:99px;font-size:11px;color:var(--dim)}" +
+        ".diff-pill.bad{color:var(--red);border-color:#5b3a1f}" +
+        ".diff-pill.mute{color:var(--faint)}" +
+        ".diff-flag{display:grid;grid-template-columns:auto auto 1fr auto;gap:10px;align-items:center;padding:6px 10px;border:1px solid var(--soft);border-radius:6px;margin-bottom:6px;background:#13100c}" +
+        ".diff-flag.bad{border-left:3px solid var(--red)}" +
+        ".diff-flag.warn{border-left:3px solid var(--amber)}" +
+        ".diff-msg{color:var(--fg);font-size:13px}" +
+        ".diff-flag .test{color:var(--faint);font-size:11px}";
 }

@@ -32,6 +32,9 @@ public class ScanMojo extends AbstractMojo {
     @Parameter(property = "querylab.scope", defaultValue = "${project.basedir}/.querylab/scope.yml")
     private File scopeFile;
 
+    @Parameter(property = "querylab.baseline", defaultValue = "${project.basedir}/.querylab/baseline.json")
+    private File baselineFile;
+
     @Parameter(property = "querylab.skip", defaultValue = "false")
     private boolean skip;
 
@@ -54,7 +57,7 @@ public class ScanMojo extends AbstractMojo {
             RunReport report = scanner.scan(classesDirectory.toPath());
 
             Path out = outputDirectory.toPath();
-            QueryLab.writeReport(report, out);
+            QueryLab.writeReport(report, out, baselineFile.toPath());
 
             getLog().info("querylab:scan complete: "
                 + report.distinctFingerprints() + " fingerprints, "

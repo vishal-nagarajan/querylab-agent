@@ -70,11 +70,41 @@ public final class QueryLab {
         return report;
     }
 
+    /** Build a report without writing it. Used by the runtime listener so it can apply the project-relative baseline. */
+    public RunResult buildReport() {
+        return new RunResult(build());
+    }
+
+    /** Tiny carrier so callers can route the built report through the static {@link #writeReport(RunReport, Path, Path)}. */
+    public static final class RunResult {
+        private final RunReport report;
+        RunResult(RunReport report) { this.report = report; }
+        public RunReport report() { return report; }
+    }
+
     /** Write an already-built report (used by the static-scan Mojo). */
     public static void writeReport(RunReport report, Path outputDir) throws IOException {
+        writeReport(report, outputDir, null);
+    }
+
+    /** Write a report. If {@code baselineFile} exists, the HTML report includes a diff section. */
+    public static void writeReport(RunReport report, Path outputDir, Path baselineFile) throws IOException {
         Files.createDirectories(outputDir);
         new JsonReportWriter().write(report, outputDir.resolve("run.json"));
-        new HtmlReportWriter().write(report, outputDir.resolve("index.html"));
+
+        in.utilhub.querylab.baseline.BaselineDiff diff = null;
+        if (baselineFile != null && Files.isRegularFile(baselineFile)) {
+            try {
+                in.utilhub.querylab.baseline.BaselineSnapshot snapshot =
+                    new in.utilhub.querylab.baseline.BaselineReader().read(baselineFile);
+                if (!snapshot.isEmpty()) {
+                    diff = in.utilhub.querylab.baseline.BaselineDiff.compute(report, snapshot);
+                }
+            } catch (Exception e) {
+                System.err.println("[querylab] could not read baseline at " + baselineFile + ": " + e.getMessage());
+            }
+        }
+        new HtmlReportWriter().write(report, outputDir.resolve("index.html"), diff);
     }
 
     private RunReport build() {

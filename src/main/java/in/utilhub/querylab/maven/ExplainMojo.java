@@ -48,6 +48,9 @@ public class ExplainMojo extends AbstractMojo {
     @Parameter(defaultValue = "${project.build.directory}/queryreport", readonly = true)
     private File outputDirectory;
 
+    @Parameter(property = "querylab.baseline", defaultValue = "${project.basedir}/.querylab/baseline.json")
+    private File baselineFile;
+
     /** Override the JDBC URL. If absent, we read application.yml. */
     @Parameter(property = "querylab.explain.url")
     private String jdbcUrl;
@@ -127,7 +130,7 @@ public class ExplainMojo extends AbstractMojo {
                 flags
             );
             Path out = outputDirectory.toPath();
-            QueryLab.writeReport(report, out);
+            QueryLab.writeReport(report, out, baselineFile.toPath());
             getLog().info("querylab:explain complete: " + explained + " queries planned, " + flagged + " flagged. report → " + out);
 
         } catch (Exception e) {

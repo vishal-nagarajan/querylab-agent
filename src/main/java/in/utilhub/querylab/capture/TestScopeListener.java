@@ -27,7 +27,13 @@ public class TestScopeListener implements TestExecutionListener {
     @Override
     public void testPlanExecutionFinished(TestPlan testPlan) {
         try {
-            QueryLab.global().buildAndWriteReport(QueryLab.defaultOutputDir());
+            // For the runtime listener we can't see the Maven `${project.basedir}`, so the baseline
+            // file is resolved relative to the working directory: <cwd>/.querylab/baseline.json.
+            java.nio.file.Path baseline = java.nio.file.Paths.get(
+                System.getProperty("user.dir"), ".querylab", "baseline.json");
+            QueryLab.RunResult result = QueryLab.global().buildReport();
+            QueryLab.writeReport(result.report(), QueryLab.defaultOutputDir(),
+                java.nio.file.Files.isRegularFile(baseline) ? baseline : null);
         } catch (Exception e) {
             // Don't fail the user's build if we can't write our report.
             System.err.println("[querylab] failed to write report: " + e.getMessage());
