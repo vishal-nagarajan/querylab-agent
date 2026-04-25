@@ -1,6 +1,10 @@
 spring:
   datasource:
-    url: jdbc:h2:mem:orders;DB_CLOSE_DELAY=-1
+    # H2 in-memory DB with schema bootstrapped via INIT=. The schema is created on every fresh
+    # connection, which means `mvn querylab:explain` (a different JVM than `mvn test`) can connect
+    # and run EXPLAIN without any -D flags. Hibernate's create-drop is happy with pre-existing
+    # tables (CREATE TABLE IF NOT EXISTS, then drop+recreate at app startup).
+    url: "jdbc:h2:mem:orders;DB_CLOSE_DELAY=-1;INIT=CREATE TABLE IF NOT EXISTS orders (id INT PRIMARY KEY AUTO_INCREMENT, customer VARCHAR(255))\\;CREATE TABLE IF NOT EXISTS line_item (id INT PRIMARY KEY AUTO_INCREMENT, order_id INT, description VARCHAR(255))"
     username: sa
     password: ""
     driver-class-name: org.h2.Driver

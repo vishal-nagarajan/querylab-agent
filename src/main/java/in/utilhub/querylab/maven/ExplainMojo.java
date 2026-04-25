@@ -42,8 +42,8 @@ public class ExplainMojo extends AbstractMojo {
     @Parameter(defaultValue = "${project.build.outputDirectory}", readonly = true)
     private File classesDirectory;
 
-    @Parameter(defaultValue = "${project.basedir}/src/main/resources", readonly = true)
-    private File resourcesDirectory;
+    @Parameter(defaultValue = "${project.basedir}", readonly = true)
+    private File projectBaseDir;
 
     @Parameter(defaultValue = "${project.build.directory}/queryreport", readonly = true)
     private File outputDirectory;
@@ -90,10 +90,15 @@ public class ExplainMojo extends AbstractMojo {
             QueryExtractor extractor = new QueryExtractor(getLog()::debug);
             List<ExtractedQuery> all = extractor.extract(classesDirectory.toPath());
             List<ExtractedQuery> nat = new ArrayList<>();
-            for (ExtractedQuery q : all) if (q.nativeQuery()) nat.add(q);
-            getLog().info("querylab:explain found " + all.size() + " @Query methods (" + nat.size() + " native, eligible for v0.2 EXPLAIN)");
+            List<ExtractedQuery> jpql = new ArrayList<>();
+            for (ExtractedQuery q : all) {
+                if (q.nativeQuery()) nat.add(q);
+                else jpql.add(q);
+            }
+            getLog().info("querylab:explain found " + all.size() + " @Query methods ("
+                + nat.size() + " native -> EXPLAIN, " + jpql.size() + " JPQL -> inventory only, EXPLAIN in v0.3)");
 
-            if (nat.isEmpty()) {
+            if (all.isEmpty()) {
                 writeEmptyReport();
                 return;
             }
@@ -109,6 +114,7 @@ public class ExplainMojo extends AbstractMojo {
             List<Flag> flags = new ArrayList<>();
             int explained = 0, flagged = 0;
 
+            // Native queries: planned through EXPLAIN, may produce flags.
             for (Map.Entry<ExtractedQuery, String> e : plans.entrySet()) {
                 explained++;
                 ExtractedQuery q = e.getKey();
@@ -120,9 +126,18 @@ public class ExplainMojo extends AbstractMojo {
                 if (f != null) { flags.add(f); flagged++; }
             }
 
+            // JPQL queries: surface in inventory so users see what's there. Tagged with [JPQL]
+            // prefix so they're visually distinct from runnable SQL.
+            for (ExtractedQuery q : jpql) {
+                String tagged = "[JPQL] " + q.sql();
+                String hash = sha256(tagged);
+                fingerprints.add(new Fingerprint(hash, tagged, 1, 1));
+                bySite.computeIfAbsent(q.site(), k -> new HashMap<>()).put(hash, 1);
+            }
+
             RunReport report = new RunReport(
                 Instant.now(),
-                explained,
+                all.size(),
                 fingerprints.size(),
                 bySite.size(),
                 fingerprints,
@@ -131,7 +146,8 @@ public class ExplainMojo extends AbstractMojo {
             );
             Path out = outputDirectory.toPath();
             QueryLab.writeReport(report, out, baselineFile.toPath());
-            getLog().info("querylab:explain complete: " + explained + " queries planned, " + flagged + " flagged. report → " + out);
+            getLog().info("querylab:explain complete: " + explained + " queries planned, "
+                + flagged + " flagged, " + jpql.size() + " JPQL surfaced. report -> " + out);
 
         } catch (Exception e) {
             throw new MojoExecutionException("querylab:explain failed: " + e.getMessage(), e);
@@ -140,12 +156,16 @@ public class ExplainMojo extends AbstractMojo {
 
     private DataSourceConfig resolveConfig() {
         if (jdbcUrl != null && !jdbcUrl.isEmpty()) {
-            return new DataSourceConfig(jdbcUrl, jdbcUser, jdbcPassword, "param");
+            return new DataSourceConfig(jdbcUrl, jdbcUser, jdbcPassword, "-Dquerylab.explain.url");
         }
-        if (resourcesDirectory.isDirectory()) {
-            return new AppConfigReader().read(resourcesDirectory.toPath(), springProfile);
+        AppConfigReader.Result result = new AppConfigReader().read(projectBaseDir.toPath(), springProfile);
+        if (result.config == null) {
+            getLog().warn("querylab:explain: no datasource auto-detected. Looked in:");
+            for (String p : result.searchedPaths) getLog().warn("  · " + p);
+            getLog().warn("Either define spring.datasource.{url,username,password} in one of those, "
+                + "or pass -Dquerylab.explain.url=... -Dquerylab.explain.user=... -Dquerylab.explain.password=...");
         }
-        return null;
+        return result.config;
     }
 
     private void writeEmptyReport() throws Exception {

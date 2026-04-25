@@ -1,10 +1,12 @@
 package in.utilhub.querylab.scan;
 
+import org.objectweb.asm.Handle;
 import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.FieldInsnNode;
 import org.objectweb.asm.tree.InsnList;
+import org.objectweb.asm.tree.InvokeDynamicInsnNode;
 import org.objectweb.asm.tree.JumpInsnNode;
 import org.objectweb.asm.tree.LabelNode;
 import org.objectweb.asm.tree.LineNumberNode;
@@ -12,13 +14,16 @@ import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
 
+import static org.objectweb.asm.Opcodes.ACC_SYNTHETIC;
 import static org.objectweb.asm.Opcodes.GETFIELD;
-import static org.objectweb.asm.Opcodes.GOTO;
 import static org.objectweb.asm.Opcodes.INVOKEINTERFACE;
 import static org.objectweb.asm.Opcodes.INVOKEVIRTUAL;
 
@@ -29,15 +34,24 @@ import static org.objectweb.asm.Opcodes.INVOKEVIRTUAL;
  *
  * Loop detection: any back-edge — a JUMP instruction whose target label appears earlier in the
  * instruction list. Anything between the target label and the jump is "inside a loop." This is
- * intentionally cheap and handles the common cases (foreach, classic for, while, do/while, and
- * stream forEach via lambdas as separate methods).
+ * intentionally cheap and handles classic for / while / do-while / for-each.
+ *
+ * Stream lambdas: Java compiles {@code list.stream().map(repo::findById)} into a synthetic method
+ * named {@code lambda$<owner>$<n>}. Since the lambda runs once per stream element, we treat its
+ * body as an implicit loop region — but only if we can prove the lambda was actually passed to a
+ * stream-context consumer (Stream.map / forEach / filter / Iterable.forEach / Map.forEach / etc.).
+ * Lambdas to {@code Optional.map}, {@code CompletableFuture.thenApply}, etc. are NOT treated as
+ * loops, removing a meaningful class of false positives.
+ *
+ * Bean-property recognition: getters are matched against {@code getXxx} / {@code isXxx} /
+ * {@code hasXxx} naming conventions.
  */
 final class PatternMatcher {
 
     static final class Finding {
         final String ruleId;
-        final String site;          // "ClassName#methodName"
-        final String predictedSql;  // synthetic SQL shape
+        final String site;
+        final String predictedSql;
         final String message;
         final String suggestedFix;
         Finding(String ruleId, String site, String predictedSql, String message, String suggestedFix) {
@@ -48,6 +62,40 @@ final class PatternMatcher {
             this.suggestedFix = suggestedFix;
         }
     }
+
+    /** Bytecode owner+name pairs that consume a lambda inside an iteration. */
+    private static final Set<String> STREAM_CONSUMERS = new HashSet<>(Arrays.asList(
+        "java/util/stream/Stream.forEach",
+        "java/util/stream/Stream.forEachOrdered",
+        "java/util/stream/Stream.map",
+        "java/util/stream/Stream.mapToInt",
+        "java/util/stream/Stream.mapToLong",
+        "java/util/stream/Stream.mapToDouble",
+        "java/util/stream/Stream.mapToObj",
+        "java/util/stream/Stream.flatMap",
+        "java/util/stream/Stream.flatMapToInt",
+        "java/util/stream/Stream.flatMapToLong",
+        "java/util/stream/Stream.flatMapToDouble",
+        "java/util/stream/Stream.filter",
+        "java/util/stream/Stream.peek",
+        "java/util/stream/IntStream.forEach",
+        "java/util/stream/IntStream.forEachOrdered",
+        "java/util/stream/IntStream.map",
+        "java/util/stream/IntStream.mapToObj",
+        "java/util/stream/IntStream.filter",
+        "java/util/stream/LongStream.forEach",
+        "java/util/stream/LongStream.map",
+        "java/util/stream/LongStream.mapToObj",
+        "java/util/stream/LongStream.filter",
+        "java/util/stream/DoubleStream.forEach",
+        "java/util/stream/DoubleStream.map",
+        "java/util/stream/DoubleStream.mapToObj",
+        "java/util/stream/DoubleStream.filter",
+        "java/lang/Iterable.forEach",
+        "java/util/Map.forEach",
+        "java/util/Map.replaceAll",
+        "java/util/Collection.removeIf"
+    ));
 
     private final EntityCatalog entities;
     private final RepositoryCatalog repos;
@@ -64,23 +112,61 @@ final class PatternMatcher {
 
     void analyze(ClassNode cn) {
         if (cn.methods == null) return;
+        // Per-class pre-pass: which `lambda$*` synthetic methods were handed to a stream consumer?
+        // Heuristic: if a method body contains both an INVOKEDYNAMIC creating a lambda for THIS
+        // class AND a stream-consumer call, mark the lambda as stream-context. Imprecise but
+        // catches the common case (chained streams in one method) without false-attributing
+        // Optional.map / CompletableFuture lambdas.
+        Set<String> streamLambdas = findStreamContextLambdas(cn);
         for (MethodNode m : cn.methods) {
             if (Scope.isMethodIgnored(m)) {
                 debug.accept("scope: skipping " + cn.name + "#" + m.name + " (@QuerylabIgnore)");
                 continue;
             }
-            analyzeMethod(cn, m);
+            analyzeMethod(cn, m, streamLambdas);
         }
     }
 
-    private void analyzeMethod(ClassNode cn, MethodNode m) {
+    private Set<String> findStreamContextLambdas(ClassNode cn) {
+        Set<String> ownLambdas = new HashSet<>();
+        Set<String> streamLambdas = new HashSet<>();
+        for (MethodNode m : cn.methods) {
+            boolean methodHasStreamConsumer = false;
+            List<String> lambdasCreatedHere = new ArrayList<>();
+            AbstractInsnNode cur = m.instructions != null ? m.instructions.getFirst() : null;
+            while (cur != null) {
+                if (cur instanceof InvokeDynamicInsnNode) {
+                    InvokeDynamicInsnNode idn = (InvokeDynamicInsnNode) cur;
+                    if (idn.bsm != null && "java/lang/invoke/LambdaMetafactory".equals(idn.bsm.getOwner())
+                        && idn.bsmArgs != null && idn.bsmArgs.length >= 2 && idn.bsmArgs[1] instanceof Handle) {
+                        Handle h = (Handle) idn.bsmArgs[1];
+                        if (cn.name.equals(h.getOwner()) && h.getName().startsWith("lambda$")) {
+                            lambdasCreatedHere.add(h.getName());
+                        }
+                    }
+                } else if ((cur.getOpcode() == INVOKEINTERFACE || cur.getOpcode() == INVOKEVIRTUAL)
+                    && cur instanceof MethodInsnNode) {
+                    MethodInsnNode mi = (MethodInsnNode) cur;
+                    if (STREAM_CONSUMERS.contains(mi.owner + "." + mi.name)) {
+                        methodHasStreamConsumer = true;
+                    }
+                }
+                cur = cur.getNext();
+            }
+            if (methodHasStreamConsumer) streamLambdas.addAll(lambdasCreatedHere);
+            ownLambdas.addAll(lambdasCreatedHere);
+        }
+        debug.accept("stream-context lambdas in " + cn.name + ": "
+            + streamLambdas.size() + "/" + ownLambdas.size());
+        return streamLambdas;
+    }
+
+    private void analyzeMethod(ClassNode cn, MethodNode m, Set<String> streamLambdas) {
         InsnList ins = m.instructions;
         if (ins == null || ins.size() == 0) return;
 
-        // Lambda body convention: javac emits `lambda$<owner>$<n>` synthetic methods. They run
-        // once per iteration when passed into Stream.map / forEach / flatMap / Iterable.forEach,
-        // so for N+1 detection we treat their whole body as an implicit loop region.
-        boolean isLambdaBody = m.name.startsWith("lambda$") && (m.access & org.objectweb.asm.Opcodes.ACC_SYNTHETIC) != 0;
+        boolean isLambdaBody = m.name.startsWith("lambda$") && (m.access & ACC_SYNTHETIC) != 0;
+        boolean isStreamLambda = isLambdaBody && streamLambdas.contains(m.name);
 
         // Index every label so we can detect back-edges (jump target appears earlier than jump).
         Map<LabelNode, Integer> labelIndex = new HashMap<>();
@@ -92,10 +178,10 @@ final class PatternMatcher {
             idx++;
         }
 
-        // Find all back-edge ranges [targetIdx .. jumpIdx]. A position is "in loop" if covered.
+        // Mark in-loop positions. Stream lambdas: the WHOLE body is implicit iteration.
         boolean[] inLoop = new boolean[idx];
-        if (isLambdaBody) {
-            java.util.Arrays.fill(inLoop, true);
+        if (isStreamLambda) {
+            Arrays.fill(inLoop, true);
         }
         cur = ins.getFirst();
         int i = 0;
@@ -118,7 +204,6 @@ final class PatternMatcher {
         while (cur != null) {
             if (cur instanceof LineNumberNode) lastLine = ((LineNumberNode) cur).line;
             if (inLoop[i]) {
-                // Pattern A: GETFIELD or invocation of a getter on a lazy entity field
                 if (cur.getOpcode() == GETFIELD) {
                     FieldInsnNode fn = (FieldInsnNode) cur;
                     if (entities.isLazyField(fn.owner, fn.name)) {
@@ -126,16 +211,12 @@ final class PatternMatcher {
                     }
                 } else if (cur.getOpcode() == INVOKEVIRTUAL || cur.getOpcode() == INVOKEINTERFACE) {
                     MethodInsnNode mi = (MethodInsnNode) cur;
-                    // Pattern B: invocation on a repository interface
                     if (cur.getOpcode() == INVOKEINTERFACE && repos.isRepositoryInterface(mi.owner)) {
                         emitPatternB(cn, m, mi, lastLine);
-                    } else {
-                        // Pattern A flavour: invocation of a getXxx() on a lazy entity field
-                        if (mi.name.startsWith("get") && entities.isEntity(mi.owner)) {
-                            String guessedField = lowerFirst(mi.name.substring(3));
-                            if (entities.isLazyField(mi.owner, guessedField)) {
-                                emitPatternA(cn, m, mi, guessedField, lastLine);
-                            }
+                    } else if (entities.isEntity(mi.owner)) {
+                        String field = beanPropertyFromGetter(mi.name);
+                        if (field != null && entities.isLazyField(mi.owner, field)) {
+                            emitPatternA(cn, m, mi, field, lastLine);
                         }
                     }
                 }
@@ -153,7 +234,7 @@ final class PatternMatcher {
             "n_plus_one_lazy_access",
             site,
             predicted,
-            "lazy field " + entitySimpleName + "." + fn.name + " accessed inside a loop — likely N+1",
+            "lazy field " + entitySimpleName + "." + fn.name + " accessed inside a loop -- likely N+1",
             "Use a JOIN FETCH, @EntityGraph, or @BatchSize on " + entitySimpleName + "." + fn.name + " to collapse the per-iteration loads."
         ));
     }
@@ -166,14 +247,13 @@ final class PatternMatcher {
             "n_plus_one_lazy_access",
             site,
             predicted,
-            "getter " + entitySimpleName + "." + mi.name + "() on a lazy field, inside a loop — likely N+1",
+            "getter " + entitySimpleName + "." + mi.name + "() on a lazy field, inside a loop -- likely N+1",
             "Use a JOIN FETCH, @EntityGraph, or @BatchSize on " + entitySimpleName + "." + fieldName + " to collapse the per-iteration loads."
         ));
     }
 
     private void emitPatternB(ClassNode cn, MethodNode m, MethodInsnNode mi, int line) {
         String repoSimpleName = simpleName(mi.owner);
-        // Synthetic SQL: we don't know the entity's table, but we can express the shape uniquely.
         String args = parameterShape(mi.desc);
         String predicted = repoSimpleName + "." + mi.name + "(" + args + ") -- per-iteration repository call";
         String site = humanSite(cn, m, line);
@@ -181,9 +261,27 @@ final class PatternMatcher {
             "n_plus_one_repo_call",
             site,
             predicted,
-            "repository call " + repoSimpleName + "." + mi.name + "() inside a loop — N+1 by construction",
+            "repository call " + repoSimpleName + "." + mi.name + "() inside a loop -- N+1 by construction",
             "Hoist this call out of the loop or batch the IDs (findAllById, custom @Query with IN-clause, or build a Map outside the loop)."
         ));
+    }
+
+    /** Bean-property name extracted from a getter method name, or null if it doesn't look like one. */
+    static String beanPropertyFromGetter(String methodName) {
+        if (methodName == null) return null;
+        if (methodName.startsWith("get") && methodName.length() > 3
+            && Character.isUpperCase(methodName.charAt(3))) {
+            return lowerFirst(methodName.substring(3));
+        }
+        if (methodName.startsWith("is") && methodName.length() > 2
+            && Character.isUpperCase(methodName.charAt(2))) {
+            return lowerFirst(methodName.substring(2));
+        }
+        if (methodName.startsWith("has") && methodName.length() > 3
+            && Character.isUpperCase(methodName.charAt(3))) {
+            return lowerFirst(methodName.substring(3));
+        }
+        return null;
     }
 
     private static String parameterShape(String methodDesc) {
