@@ -1,35 +1,71 @@
 # querylab-agent
 
+[![JitPack](https://jitpack.io/v/vishal-nagarajan/querylab-agent.svg)](https://jitpack.io/#vishal-nagarajan/querylab-agent)
+
 > Your Spring app's SQL inventory, kept honest on every PR.
 
 A Spring Boot test-scope library that captures every SQL fingerprint your tests emit, flags N+1s, and writes a local HTML report. Free, no account, runs offline.
 
 Part of [jpa.utilhub.in](https://jpa.utilhub.in).
 
-## Install
+## Install (via JitPack)
+
+### Maven
 
 ```xml
+<repositories>
+  <repository>
+    <id>jitpack.io</id>
+    <url>https://jitpack.io</url>
+  </repository>
+</repositories>
+
 <dependency>
-  <groupId>in.utilhub</groupId>
+  <groupId>com.github.vishal-nagarajan</groupId>
   <artifactId>querylab-agent</artifactId>
-  <version>0.1.0-SNAPSHOT</version>
+  <version>0.1.1</version>
   <scope>test</scope>
 </dependency>
 ```
 
-(For now via JitPack — see *Distribution* below. Maven Central once 0.1.0 is tagged.)
+### Gradle (Kotlin DSL)
+
+```kotlin
+repositories {
+    maven("https://jitpack.io")
+}
+
+dependencies {
+    testImplementation("com.github.vishal-nagarajan:querylab-agent:0.1.1")
+}
+
+tasks.test { useJUnitPlatform() }   // already the default in Spring Boot Gradle projects
+```
+
+### Gradle (Groovy DSL)
+
+```groovy
+repositories { maven { url 'https://jitpack.io' } }
+dependencies { testImplementation 'com.github.vishal-nagarajan:querylab-agent:0.1.1' }
+test { useJUnitPlatform() }
+```
+
+> Maven Central will be supported once the API stabilises. Until then, JitPack is the install path. The published `groupId` is `com.github.vishal-nagarajan` per JitPack convention; the future Maven Central groupId will be `in.utilhub`.
 
 ## Use
 
 ```bash
-mvn test
+mvn test       # Maven       → report at target/queryreport/
+./gradlew test # Gradle      → report at build/queryreport/
 ```
 
-That's it. The agent registers a Hibernate `StatementInspector` automatically through Spring Boot autoconfiguration. After the test run finishes, look at:
+That's it. The agent registers a Hibernate `StatementInspector` automatically through Spring Boot autoconfiguration; the JUnit Platform launcher discovers our test listener via `META-INF/services` (standard JAR mechanisms — no build-tool-specific config). After the test run finishes, open the `index.html` from whichever directory matches your build tool.
+
+To force a custom output location (CI artifact, monorepo, etc.):
 
 ```
-target/queryreport/index.html
-target/queryreport/run.json
+mvn test -Dquerylab.output.dir=ci-artifacts/queryreport
+./gradlew test -Dquerylab.output.dir=ci-artifacts/queryreport
 ```
 
 ## What it captures (v0)
