@@ -52,6 +52,10 @@ public final class BytecodeScanner {
         PatternMatcher matcher = new PatternMatcher(entities, repos, debug);
         forEachClass(classesRoot, cn -> {
             if (!scope.accepts(cn.name)) return;
+            if (Scope.isClassIgnored(cn)) {
+                debug.accept("scope: skipping " + cn.name + " (@QuerylabIgnore)");
+                return;
+            }
             matcher.analyze(cn);
         });
 

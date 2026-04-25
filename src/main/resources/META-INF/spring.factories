@@ -1,0 +1,5 @@
+# Spring Boot 2.x autoconfiguration discovery.
+# Spring Boot 3.x uses META-INF/spring/...AutoConfiguration.imports (also shipped in this jar);
+# both files coexist without conflict.
+org.springframework.boot.autoconfigure.EnableAutoConfiguration=\
+in.utilhub.querylab.autoconfig.QuerylabAutoConfiguration

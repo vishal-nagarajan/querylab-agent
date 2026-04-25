@@ -65,6 +65,10 @@ final class PatternMatcher {
     void analyze(ClassNode cn) {
         if (cn.methods == null) return;
         for (MethodNode m : cn.methods) {
+            if (Scope.isMethodIgnored(m)) {
+                debug.accept("scope: skipping " + cn.name + "#" + m.name + " (@QuerylabIgnore)");
+                continue;
+            }
             analyzeMethod(cn, m);
         }
     }

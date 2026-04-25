@@ -71,11 +71,23 @@
       <version>${asm.version}</version>
     </dependency>
 
-    <!-- ===== scope.yml parser ===== -->
+    <!-- ===== scope.yml + application.yml parsing ===== -->
     <dependency>
       <groupId>org.yaml</groupId>
       <artifactId>snakeyaml</artifactId>
       <version>${snakeyaml.version}</version>
+    </dependency>
+
+    <!-- ===== JDBC drivers for explain mode (bundled so the plugin works without user setup) ===== -->
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <version>42.7.5</version>
+    </dependency>
+    <dependency>
+      <groupId>com.h2database</groupId>
+      <artifactId>h2</artifactId>
+      <version>2.2.224</version>
     </dependency>
 
     <!-- ===== Optional consumer-side deps (runtime listener path) ===== -->

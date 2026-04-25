@@ -92,6 +92,26 @@ public final class Scope {
         return true;
     }
 
+    private static final String IGNORE_DESC_JAKARTA = "Lin/utilhub/querylab/annotations/QuerylabIgnore;";
+
+    /** True if this class carries {@code @QuerylabIgnore} at type level. */
+    public static boolean isClassIgnored(org.objectweb.asm.tree.ClassNode cn) {
+        return hasIgnore(cn.visibleAnnotations) || hasIgnore(cn.invisibleAnnotations);
+    }
+
+    /** True if this method carries {@code @QuerylabIgnore} (class-level ignore handled separately). */
+    public static boolean isMethodIgnored(org.objectweb.asm.tree.MethodNode mn) {
+        return hasIgnore(mn.visibleAnnotations) || hasIgnore(mn.invisibleAnnotations);
+    }
+
+    private static boolean hasIgnore(java.util.List<org.objectweb.asm.tree.AnnotationNode> anns) {
+        if (anns == null) return false;
+        for (org.objectweb.asm.tree.AnnotationNode an : anns) {
+            if (IGNORE_DESC_JAKARTA.equals(an.desc)) return true;
+        }
+        return false;
+    }
+
     public boolean isFingerprintIgnored(String hash) {
         for (String h : ignoreFingerprints) if (hash.startsWith(h)) return true;
         return false;

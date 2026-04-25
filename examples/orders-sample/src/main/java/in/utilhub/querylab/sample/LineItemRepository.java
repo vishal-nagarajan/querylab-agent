@@ -14,4 +14,12 @@ public interface LineItemRepository extends JpaRepository<LineItem, Long> {
      */
     @Query("select li.id from LineItem li where li.orderId = :orderId order by li.id")
     List<Long> findIdsByOrderId(@Param("orderId") Long orderId);
+
+    /**
+     * Native query that filters on a column without an index. EXPLAIN should reveal
+     * a full table scan — the {@code lost_index} rule fires on this in querylab:explain mode.
+     */
+    @Query(value = "SELECT id, order_id, description FROM line_item WHERE description = ?1",
+           nativeQuery = true)
+    List<LineItem> findByDescriptionNative(String description);
 }
