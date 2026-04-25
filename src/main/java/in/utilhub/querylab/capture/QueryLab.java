@@ -66,10 +66,15 @@ public final class QueryLab {
     /** Build the report, run rules, and write the artifacts. */
     public RunReport buildAndWriteReport(Path outputDir) throws IOException {
         RunReport report = build();
+        writeReport(report, outputDir);
+        return report;
+    }
+
+    /** Write an already-built report (used by the static-scan Mojo). */
+    public static void writeReport(RunReport report, Path outputDir) throws IOException {
         Files.createDirectories(outputDir);
         new JsonReportWriter().write(report, outputDir.resolve("run.json"));
         new HtmlReportWriter().write(report, outputDir.resolve("index.html"));
-        return report;
     }
 
     private RunReport build() {
@@ -113,9 +118,27 @@ public final class QueryLab {
         );
     }
 
-    /** Resolve where target/queryreport/ lives based on the working directory. */
+    /**
+     * Resolve where the report directory lives.
+     * <ul>
+     *   <li>{@code -Dquerylab.output.dir=...} overrides everything (use this in any build tool).</li>
+     *   <li>If a {@code build/} directory exists in the working dir and {@code target/} doesn't,
+     *   we assume Gradle and write to {@code build/queryreport/}.</li>
+     *   <li>Otherwise (Maven, default) we write to {@code target/queryreport/}.</li>
+     * </ul>
+     */
     public static Path defaultOutputDir() {
-        return Paths.get(System.getProperty("user.dir")).resolve("target").resolve("queryreport");
+        String override = System.getProperty("querylab.output.dir");
+        if (override != null && !override.isEmpty()) {
+            return Paths.get(override);
+        }
+        Path cwd = Paths.get(System.getProperty("user.dir"));
+        boolean hasBuild  = Files.isDirectory(cwd.resolve("build"));
+        boolean hasTarget = Files.isDirectory(cwd.resolve("target"));
+        if (hasBuild && !hasTarget) {
+            return cwd.resolve("build").resolve("queryreport");
+        }
+        return cwd.resolve("target").resolve("queryreport");
     }
 
     /** Reset state (used by tests). */

@@ -6,11 +6,11 @@
 
   <groupId>in.utilhub</groupId>
   <artifactId>querylab-agent</artifactId>
-  <version>0.1.2-SNAPSHOT</version>
-  <packaging>jar</packaging>
+  <version>0.2.0-SNAPSHOT</version>
+  <packaging>maven-plugin</packaging>
 
   <name>querylab-agent</name>
-  <description>Captures SQL fingerprints during Spring Boot tests, generates a local HTML report, flags N+1s.</description>
+  <description>Spring Boot test-scope library + Maven plugin. Captures SQL fingerprints, scans bytecode for N+1 patterns, runs EXPLAIN against your dev DB, writes a local HTML report.</description>
   <url>https://jpa.utilhub.in</url>
 
   <licenses>
@@ -20,10 +20,18 @@
     </license>
   </licenses>
 
+  <prerequisites>
+    <maven>3.6.3</maven>
+  </prerequisites>
+
   <properties>
     <maven.compiler.source>11</maven.compiler.source>
     <maven.compiler.target>11</maven.compiler.target>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <maven.version>3.9.6</maven.version>
+    <maven-plugin-tools.version>3.13.1</maven-plugin-tools.version>
+    <asm.version>9.7.1</asm.version>
+    <snakeyaml.version>2.2</snakeyaml.version>
     <hibernate.version>6.4.4.Final</hibernate.version>
     <spring-boot.version>3.2.5</spring-boot.version>
     <junit.platform.version>1.10.2</junit.platform.version>
@@ -31,23 +39,58 @@
   </properties>
 
   <dependencies>
-    <!-- Hibernate StatementInspector interface. Optional: consumer brings their own Hibernate. -->
+    <!-- ===== Maven plugin API (provided by Maven at runtime) ===== -->
+    <dependency>
+      <groupId>org.apache.maven</groupId>
+      <artifactId>maven-plugin-api</artifactId>
+      <version>${maven.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.maven</groupId>
+      <artifactId>maven-core</artifactId>
+      <version>${maven.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.maven.plugin-tools</groupId>
+      <artifactId>maven-plugin-annotations</artifactId>
+      <version>${maven-plugin-tools.version}</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <!-- ===== Bytecode scanning ===== -->
+    <dependency>
+      <groupId>org.ow2.asm</groupId>
+      <artifactId>asm</artifactId>
+      <version>${asm.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.ow2.asm</groupId>
+      <artifactId>asm-tree</artifactId>
+      <version>${asm.version}</version>
+    </dependency>
+
+    <!-- ===== scope.yml parser ===== -->
+    <dependency>
+      <groupId>org.yaml</groupId>
+      <artifactId>snakeyaml</artifactId>
+      <version>${snakeyaml.version}</version>
+    </dependency>
+
+    <!-- ===== Optional consumer-side deps (runtime listener path) ===== -->
     <dependency>
       <groupId>org.hibernate.orm</groupId>
       <artifactId>hibernate-core</artifactId>
       <version>${hibernate.version}</version>
       <optional>true</optional>
     </dependency>
-
-    <!-- Spring Boot autoconfig. Optional: consumer brings their own Spring Boot. -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-autoconfigure</artifactId>
       <version>${spring-boot.version}</version>
       <optional>true</optional>
     </dependency>
-
-    <!-- JUnit Platform launcher: TestExecutionListener interface. Optional. -->
     <dependency>
       <groupId>org.junit.platform</groupId>
       <artifactId>junit-platform-launcher</artifactId>
@@ -55,7 +98,7 @@
       <optional>true</optional>
     </dependency>
 
-    <!-- Test deps (verifying our own logic) -->
+    <!-- ===== Tests ===== -->
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
@@ -72,6 +115,14 @@
         <version>3.13.0</version>
         <configuration>
           <encoding>UTF-8</encoding>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-plugin-plugin</artifactId>
+        <version>${maven-plugin-tools.version}</version>
+        <configuration>
+          <goalPrefix>querylab</goalPrefix>
         </configuration>
       </plugin>
       <plugin>
