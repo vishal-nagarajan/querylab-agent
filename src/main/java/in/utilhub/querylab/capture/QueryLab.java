@@ -52,6 +52,10 @@ public final class QueryLab {
             // Outside a test (context startup, schema bootstrap) — ignore in v0.
             return;
         }
+        if (TestScope.isCurrentIgnored()) {
+            // The test (or its class) is @QuerylabIgnore — drop the emission silently.
+            return;
+        }
         String normalized = normalize(sql);
         String hash = sha256(normalized);
         sqlByHash.putIfAbsent(hash, normalized);
@@ -61,6 +65,25 @@ public final class QueryLab {
             .merge(hash, 1, Integer::sum);
 
         totalEmissions.incrementAndGet();
+    }
+
+    /** Per-test expectations gathered from {@code @QuerylabExpect} on the test method. */
+    private final ConcurrentHashMap<String, java.util.List<Expectation>> expectations = new ConcurrentHashMap<>();
+
+    public void recordExpectation(String testName, String ruleId, String fingerprintLike, int maxEmissions) {
+        expectations.computeIfAbsent(testName, k -> new java.util.concurrent.CopyOnWriteArrayList<>())
+            .add(new Expectation(ruleId, fingerprintLike, maxEmissions));
+    }
+
+    static final class Expectation {
+        final String ruleId;            // empty = match any rule
+        final String fingerprintLike;   // empty = match any fingerprint
+        final int maxEmissions;
+        Expectation(String ruleId, String fingerprintLike, int maxEmissions) {
+            this.ruleId = ruleId == null ? "" : ruleId;
+            this.fingerprintLike = fingerprintLike == null ? "" : fingerprintLike;
+            this.maxEmissions = maxEmissions;
+        }
     }
 
     /** Build the report, run rules, and write the artifacts. */
@@ -135,7 +158,15 @@ public final class QueryLab {
         // Run rules
         RuleEngine engine = new RuleEngine();
         engine.register(new NPlusOneRule());
-        List<Flag> flags = engine.runOver(fingerprints, snapshot);
+        List<Flag> raw = engine.runOver(fingerprints, snapshot);
+
+        // Apply @QuerylabExpect suppression: drop a flag if the test method has an expectation
+        // matching its (rule, fingerprint, count).
+        Map<String, String> sqlByHashSnapshot = new HashMap<>(sqlByHash);
+        List<Flag> flags = new ArrayList<>(raw.size());
+        for (Flag f : raw) {
+            if (!isSuppressed(f, snapshot, sqlByHashSnapshot)) flags.add(f);
+        }
 
         return new RunReport(
             Instant.now(),
@@ -146,6 +177,20 @@ public final class QueryLab {
             snapshot,
             flags
         );
+    }
+
+    private boolean isSuppressed(Flag f, Map<String, Map<String, Integer>> snapshot, Map<String, String> sqlByHashSnapshot) {
+        java.util.List<Expectation> exps = expectations.get(f.testMethod());
+        if (exps == null || exps.isEmpty()) return false;
+        Map<String, Integer> perTest = snapshot.getOrDefault(f.testMethod(), java.util.Collections.emptyMap());
+        int observedCount = perTest.getOrDefault(f.fingerprintHash(), 0);
+        String sql = sqlByHashSnapshot.getOrDefault(f.fingerprintHash(), "");
+        for (Expectation e : exps) {
+            if (!e.ruleId.isEmpty() && !e.ruleId.equals(f.ruleId())) continue;
+            if (!e.fingerprintLike.isEmpty() && !sql.contains(e.fingerprintLike)) continue;
+            if (observedCount <= e.maxEmissions) return true;
+        }
+        return false;
     }
 
     /**
