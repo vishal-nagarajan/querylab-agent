@@ -33,7 +33,7 @@
     <dependency>
       <groupId>in.utilhub</groupId>
       <artifactId>querylab-agent</artifactId>
-      <version>0.1.0</version>
+      <version>0.1.1-SNAPSHOT</version>
       <scope>test</scope>
     </dependency>
 
