@@ -6,7 +6,7 @@
 
   <groupId>in.utilhub</groupId>
   <artifactId>querylab-agent</artifactId>
-  <version>0.1.0-SNAPSHOT</version>
+  <version>0.1.0</version>
   <packaging>jar</packaging>
 
   <name>querylab-agent</name>
